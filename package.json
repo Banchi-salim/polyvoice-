@@ -1,0 +1,14 @@
+{
+  "name": "polyvoice-whatsapp-web-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local WhatsApp Web demo bridge for PolyVoice.",
+  "scripts": {
+    "whatsapp:web": "node scripts/whatsapp_web_bridge.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "qrcode": "^1.5.4",
+    "whatsapp-web.js": "^1.26.0"
+  }
+}

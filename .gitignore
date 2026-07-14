@@ -1,0 +1,53 @@
+# PolyVoice — repo-local ignore rules
+# -----------------------------------
+# This file lives at the project root so casual git operations
+# (git status, git add, IDE indexing) stay out of the way of the
+# dev/build artifacts the EXE bundling doesn't need.
+
+# ---- Runtime data (per-user, never ships in the EXE) --------------
+# The dev data dir lives at <project>/data/ when running `python -m`
+# and at %APPDATA%/PolyVoice/ when running PolyVoice.exe. Both must
+# be excluded from the source tree, plus the stale nested leftovers
+# from prior botched runs (data/data/, scripts/data/).
+data/
+data/data/
+scripts/data/
+
+# ---- Build / packaging artifacts -----------------------------------
+# These directories are regeneratable from the source: `python
+# scripts/build_exe.py` → `pyinstaller PolyVoice.spec` → `iscc
+# PolyVoice.iss` rebuilds them. Keep them out of the repo.
+build/
+dist/
+installer_output/
+
+# ---- Node / Python caches -----------------------------------------
+# `scripts/bridge/node_modules/` is rebuilt by `npm ci --omit=dev`
+# during the build helper. `__pycache__/` and `.pytest_cache/` are
+# Python toolchain side-effects. The .idea/ and .claude/ dirs are
+# IDE / Claude Code local state.
+scripts/bridge/node_modules/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# ---- Editor / tool state -----------------------------------------
+.idea/
+.vscode/
+.claude/
+*.swp
+.DS_Store
+
+# ---- Secrets / local config --------------------------------------
+# `.env` holds OPENAI_API_KEY / DEEPGRAM_API_KEY / etc. The PolyVoice
+# app reads .env from %APPDATA%/PolyVoice/ or next to PolyVoice.exe
+# at runtime, never from the repo. Don't commit a developer's local
+# keys.
+.env
+.env.*
+!.env.example
+
+# ---- PyInstaller scratch -----------------------------------------
+# `.spec.bak` files are left behind by `pyi-makespec` rewrites.
+*.spec.bak

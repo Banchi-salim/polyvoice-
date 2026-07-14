@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" light dark>
+  <title>PolyVoice · Linking</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="topbar" role="banner">
+      <div class="brand">
+        <a class="brand-link" href="/" aria-label="Back to console">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">PolyVoice</span>
+        </a>
+      </div>
+      <div class="topbar-right">
+        <a class="topbar-link" href="/">Console</a>
+        <a class="topbar-link active" href="/linking" aria-current="page">Linking</a>
+        <div class="status-chip" id="statusChip" data-state="loading" role="status" aria-live="polite">
+          <span class="status-dot" id="statusDot"></span>
+          <span class="status-label" id="statusLabel">Loading</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="linking" id="linking">
+      <section class="linking-card" id="linkingCard" data-state="loading">
+        <h1 class="linking-title" id="linkingTitle">Link WhatsApp</h1>
+        <p class="linking-sub" id="linkingSub">Preparing the bridge…</p>
+
+        <div class="linking-qr" id="qrStage" hidden>
+          <div class="qr-frame">
+            <img id="qrImage" alt="WhatsApp login QR code">
+            <div class="qr-placeholder" id="qrPlaceholder">
+              <div class="qr-spinner" aria-hidden="true"></div>
+              <p class="qr-placeholder-text" id="qrPlaceholderText">Waiting for QR…</p>
+            </div>
+          </div>
+          <p class="qr-hint">Open WhatsApp on your phone → <strong>Settings</strong> → <strong>Linked devices</strong> → <strong>Link a device</strong></p>
+          <button class="ghost-button qr-refresh" id="qrRefresh" type="button">Refresh QR</button>
+        </div>
+
+        <div class="linking-cta" id="ctaStage">
+          <button class="primary-button" id="primaryBtn" type="button" hidden>Start linking</button>
+          <button class="danger-button" id="delinkBtn" type="button" hidden>Delink WhatsApp</button>
+          <p class="cta-error" id="errorMsg" hidden></p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/linking.js" defer></script>
+</body>
+</html>

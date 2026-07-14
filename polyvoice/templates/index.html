@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>PolyVoice</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="app" id="app">
+
+    <!-- Top bar: wordmark + bridge status. Hidden on mobile (status moves to chat header). -->
+    <header class="topbar" role="banner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">PolyVoice</span>
+      </div>
+      <div class="topbar-right">
+        <a class="topbar-link" href="/linking">Linking</a>
+        <div class="status-chip" id="statusChip" data-state="loading" role="status" aria-live="polite">
+          <span class="status-dot" id="statusDot"></span>
+          <span class="status-label" id="statusLabel">Loading</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Sidebar: contact list and connect panel. Slides over the chat on mobile. -->
+    <aside class="sidebar" id="sidebar" aria-label="Conversations">
+      <div class="sidebar-head">
+        <h2 class="sidebar-title">Conversations</h2>
+        <button class="icon-button" id="newDemoBtn" type="button" aria-label="New demo conversation" title="New demo">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 5a1 1 0 0 1 1 1v5h5a1 1 0 1 1 0 2h-5v5a1 1 0 1 1-2 0v-5H6a1 1 0 1 1 0-2h5V6a1 1 0 0 1 1-1z"/></svg>
+        </button>
+      </div>
+
+      <div class="connect-card" id="connectCard">
+        <div class="connect-row">
+          <span class="bridge-dot" id="bridgeDot" data-state="stopped" aria-hidden="true"></span>
+          <div class="connect-text">
+            <div class="connect-title" id="bridgeStatus">WhatsApp</div>
+            <div class="connect-sub" id="bridgeSub">Not connected</div>
+          </div>
+        </div>
+        <button class="ghost-button" id="connectWhatsApp" type="button">Connect WhatsApp</button>
+        <div class="qr-panel" id="qrBox" hidden>
+          <img id="qrImage" alt="WhatsApp login QR code">
+          <div class="qr-caption">Scan with WhatsApp Linked devices</div>
+        </div>
+      </div>
+
+      <nav class="contacts" id="contacts" aria-label="Contact list"></nav>
+    </aside>
+
+    <!-- Chat pane: header, message list, sticky composer. -->
+    <main class="chat" id="chat">
+      <div class="chat-head">
+        <button class="icon-button chat-back" id="backBtn" type="button" aria-label="Back to conversations" hidden>
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M15 6a1 1 0 0 1 .7 1.71L11.41 12l4.3 4.29a1 1 0 1 1-1.42 1.42l-5-5a1 1 0 0 1 0-1.42l5-5A1 1 0 0 1 15 6z"/></svg>
+        </button>
+        <div class="chat-head-text">
+          <div class="chat-title" id="title">Realtime Translator</div>
+          <div class="chat-sub" id="subtitle">Incoming messages translate to your language; replies translate back</div>
+        </div>
+      </div>
+
+      <section class="messages" id="messages" aria-live="polite" aria-label="Messages"></section>
+
+      <form class="composer" id="composer" autocomplete="off">
+        <div class="composer-name" id="name" role="text" aria-label="Active contact" aria-readonly="true">Demo Friend</div>
+        <input class="composer-input" id="text" placeholder="Reply in your language..." aria-label="Message" maxlength="500">
+        <select class="composer-lang" id="language" aria-label="Your language">
+          <option value="ig">Igbo</option>
+          <option value="yo">Yoruba</option>
+          <option value="ha">Hausa</option>
+          <option value="en">English</option>
+          <option value="ar">Arabic</option>
+          <option value="ko">Korean</option>
+          <option value="fr">French</option>
+          <option value="es">Spanish</option>
+        </select>
+        <button class="composer-mic" id="micBtn" type="button" aria-label="Record voice reply" data-state="idle" title="Record voice">
+          <span class="mic-icon-wrap">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" class="mic-icon">
+              <path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3z"/>
+              <path fill="currentColor" d="M19 11a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V21H8a1 1 0 1 0 0 2h8a1 1 0 1 0 0-2h-3v-3.08A7 7 0 0 0 19 11z"/>
+            </svg>
+            <span class="mic-stop" aria-hidden="true"></span>
+          </span>
+          <span class="mic-label" id="micLabel">Record voice</span>
+          <span class="mic-timer" id="micTimer" aria-hidden="true">0:00</span>
+        </button>
+        <button class="composer-send" id="sendBtn" type="submit" aria-label="Send">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M3.4 20.4l17.45-7.48a1 1 0 0 0 0-1.84L3.4 3.6a1 1 0 0 0-1.39 1.21L4.5 11 12 12l-7.5 1-2.49 6.19a1 1 0 0 0 1.39 1.21z"/></svg>
+          <span>Send</span>
+        </button>
+      </form>
+
+      <!-- Voice-reply preview bar. Shown after the user stops recording and
+           before they send. Lets them replay the recording, re-record, or
+           send it through the translator. -->
+      <div class="voice-preview" id="voicePreview" hidden>
+        <span class="voice-preview-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3z"/><path fill="currentColor" d="M19 11a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V21H8a1 1 0 1 0 0 2h8a1 1 0 1 0 0-2h-3v-3.08A7 7 0 0 0 19 11z"/></svg>
+        </span>
+        <audio id="voicePreviewAudio" controls preload="metadata"></audio>
+        <div class="voice-preview-meta" id="voicePreviewMeta">0:00</div>
+        <button class="voice-preview-btn voice-preview-discard" id="voicePreviewDiscard" type="button" title="Re-record">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 5V1L7 6l5 5V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg>
+          <span>Re-record</span>
+        </button>
+        <button class="voice-preview-btn voice-preview-send" id="voicePreviewSend" type="button" title="Send voice reply">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg>
+          <span>Send</span>
+        </button>
+      </div>
+
+      <!-- Toast for surfacing transient errors and statuses (instead of alert()). -->
+      <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    </main>
+
+    <!-- Backdrop used to dim the chat when the sidebar drawer is open on mobile. -->
+    <div class="backdrop" id="backdrop" hidden></div>
+  </div>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
