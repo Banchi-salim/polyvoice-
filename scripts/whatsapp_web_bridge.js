@@ -30,10 +30,15 @@ const state = {
 
 const MAX_HANDLED_IDS = 5000;
 const handledMessageIds = new Set();
+const processingMessageIds = new Set();
 let cachedChats = [];
 let syncTimer = null;
 let chatRefreshTimer = null;
 let chatRefreshInFlight = false;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function markHandled(messageId) {
   handledMessageIds.add(messageId);
@@ -286,20 +291,26 @@ async function refreshChatCache() {
 }
 
 async function processIncomingMessage(message) {
+  let messageId = null;
   try {
     if (message.fromMe) return;
     if (!REPLY_GROUPS && message.from.endsWith("@g.us")) return;
-    const messageId = message.id && message.id._serialized ? message.id._serialized : `${message.from}:${message.timestamp}:${message.body}`;
+    messageId = message.id && message.id._serialized ? message.id._serialized : `${message.from}:${message.timestamp}:${message.body}`;
     if (handledMessageIds.has(messageId)) return;
-    markHandled(messageId);
+    if (processingMessageIds.has(messageId)) return;
+    processingMessageIds.add(messageId);
 
     const contact = await message.getContact();
     const contactName = contact.pushname || contact.name || contact.number || message.from;
     state.lastMessageAt = new Date().toISOString();
 
     if (message.hasMedia && (message.type === "audio" || message.type === "ptt")) {
-      const media = await message.downloadMedia();
-      if (!media || !media.data) return;
+      console.log(`Incoming WhatsApp voice note from ${contactName}; downloading media...`);
+      const media = await downloadMediaWithRetry(message, messageId);
+      if (!media || !media.data) {
+        console.warn(`WhatsApp voice note media was not available after retries: ${messageId}`);
+        return;
+      }
 
       // Let Whisper auto-detect the language
       await askPolyVoice({
@@ -310,12 +321,16 @@ async function processIncomingMessage(message) {
         mime_type: media.mimetype,
         // source_language omitted = auto-detect
       });
+      markHandled(messageId);
       state.handledCount += 1;
       return;
     }
 
     const text = (message.body || "").trim();
-    if (!text) return;
+    if (!text) {
+      markHandled(messageId);
+      return;
+    }
 
     // For text messages, let the PolyVoice backend detect the language
     await askPolyVoice({
@@ -325,10 +340,43 @@ async function processIncomingMessage(message) {
       text,
       source_language: null, // backend will detect
     });
+    markHandled(messageId);
     state.handledCount += 1;
   } catch (error) {
     recordError(error);
+  } finally {
+    if (messageId) {
+      processingMessageIds.delete(messageId);
+    }
   }
+}
+
+async function downloadMediaWithRetry(message, messageId) {
+  const attempts = [0, 1000, 2000, 4000, 8000];
+  let lastError = null;
+  for (let index = 0; index < attempts.length; index += 1) {
+    const delay = attempts[index];
+    if (delay) {
+      await sleep(delay);
+    }
+    try {
+      const media = await message.downloadMedia();
+      if (media && media.data) {
+        if (index > 0) {
+          console.log(`WhatsApp media became available after ${index + 1} attempts: ${messageId}`);
+        }
+        return media;
+      }
+      console.warn(`WhatsApp media download returned empty data on attempt ${index + 1}/${attempts.length}: ${messageId}`);
+    } catch (error) {
+      lastError = error;
+      console.warn(`WhatsApp media download failed on attempt ${index + 1}/${attempts.length}:`, error);
+    }
+  }
+  if (lastError) {
+    throw lastError;
+  }
+  return null;
 }
 
 function recordError(error) {
