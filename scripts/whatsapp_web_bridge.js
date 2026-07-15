@@ -21,6 +21,8 @@ const state = {
   qr: null,
   me: null,
   lastError: null,
+  chatListReady: false,
+  chatCount: 0,
   lastMessageAt: null,
   lastSyncAt: null,
   handledCount: 0,
@@ -28,7 +30,10 @@ const state = {
 
 const MAX_HANDLED_IDS = 5000;
 const handledMessageIds = new Set();
+let cachedChats = [];
 let syncTimer = null;
+let chatRefreshTimer = null;
+let chatRefreshInFlight = false;
 
 function markHandled(messageId) {
   handledMessageIds.add(messageId);
@@ -52,7 +57,7 @@ app.get("/status", (req, res) => {
 // List every non-group chat the linked WhatsApp account has ever seen. Used
 // by the FastAPI side to seed the contact picker so the user can pick a
 // real JID before sending — without this, the picker would only ever show
-// a single "Demo Friend" placeholder row.
+// a single local placeholder row.
 app.get("/chats", async (req, res) => {
   if (state.status !== "ready") {
     res.status(409).json({ ok: false, error: "WhatsApp bridge is not ready." });
@@ -60,26 +65,18 @@ app.get("/chats", async (req, res) => {
   }
   try {
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
-    const chats = await client.getChats();
-    const filtered = REPLY_GROUPS ? chats : chats.filter((c) => !c.isGroup);
-    const items = filtered.slice(0, limit).map((chat) => {
-      // The JID is the canonical id (e.g. "2348012345678@c.us"). For groups
-      // (when REPLY_GROUPS=1) the id is the group JID. Either way the
-      // server can use it as `to` when calling /send.
-      const id = chat.id && chat.id._serialized ? chat.id._serialized : null;
-      const name = chat.name || chat.contact && (chat.contact.pushname || chat.contact.name) || (id || "");
-      return {
-        id,
-        name,
-        is_group: !!chat.isGroup,
-        unread_count: chat.unreadCount || 0,
-        timestamp: chat.timestamp || null,
-      };
-    });
-    res.json({ ok: true, chats: items });
+    if (!state.chatListReady) {
+      await refreshChatCache();
+    }
+    res.json({ ok: true, chats: cachedChats.slice(0, limit), warming: !state.chatListReady });
   } catch (error) {
     recordError(error);
-    res.status(500).json({ ok: false, error: String(error && error.message ? error.message : error) });
+    res.json({
+      ok: true,
+      chats: cachedChats.slice(0, Math.min(Math.max(Number(req.query.limit) || 50, 1), 200)),
+      warming: true,
+      error: String(error && error.message ? error.message : error),
+    });
   }
 });
 
@@ -108,6 +105,10 @@ app.post("/disconnect", async (req, res) => {
   if (syncTimer) {
     clearInterval(syncTimer);
     syncTimer = null;
+  }
+  if (chatRefreshTimer) {
+    clearInterval(chatRefreshTimer);
+    chatRefreshTimer = null;
   }
 
   setTimeout(async () => {
@@ -202,6 +203,10 @@ client.on("ready", () => {
   state.status = "ready";
   state.me = client.info && client.info.wid ? client.info.wid.user : null;
   console.log("WhatsApp Web bridge is ready.");
+  refreshChatCache().catch(recordError);
+  chatRefreshTimer = setInterval(() => {
+    refreshChatCache().catch(recordError);
+  }, 5000);
   syncUnreadChats().catch(recordError);
   syncTimer = setInterval(() => {
     syncUnreadChats().catch(recordError);
@@ -225,9 +230,15 @@ client.on("message", async (message) => {
 });
 
 async function syncUnreadChats() {
-  if (state.status !== "ready") return;
+  if (state.status !== "ready" || !state.chatListReady) return;
   state.lastSyncAt = new Date().toISOString();
-  const chats = await client.getChats();
+  let chats;
+  try {
+    chats = await client.getChats();
+  } catch (error) {
+    recordError(error);
+    return;
+  }
   for (const chat of chats) {
     if (!chat.unreadCount) continue;
     if (!REPLY_GROUPS && chat.isGroup) continue;
@@ -237,6 +248,40 @@ async function syncUnreadChats() {
     for (const message of messages) {
       await processIncomingMessage(message);
     }
+  }
+}
+
+async function refreshChatCache() {
+  if (state.status !== "ready" || chatRefreshInFlight) return cachedChats;
+  chatRefreshInFlight = true;
+  try {
+    const chats = await client.getChats();
+    const filtered = REPLY_GROUPS ? chats : chats.filter((c) => !c.isGroup);
+    cachedChats = filtered
+      .map((chat) => {
+        const id = chat.id && chat.id._serialized ? chat.id._serialized : null;
+        if (!id) return null;
+        const contact = chat.contact || {};
+        const name = chat.name || contact.pushname || contact.name || contact.number || id;
+        return {
+          id,
+          name,
+          is_group: !!chat.isGroup,
+          unread_count: chat.unreadCount || 0,
+          timestamp: chat.timestamp || null,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    state.chatListReady = true;
+    state.chatCount = cachedChats.length;
+    return cachedChats;
+  } catch (error) {
+    state.chatListReady = false;
+    recordError(error);
+    return cachedChats;
+  } finally {
+    chatRefreshInFlight = false;
   }
 }
 

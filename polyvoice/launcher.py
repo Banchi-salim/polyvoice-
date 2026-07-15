@@ -38,6 +38,7 @@ import uvicorn
 # but doing it here first means we can resolve paths for our own
 # first-run extraction step without depending on a transitive import.
 from polyvoice import __version__  # noqa: E402
+from polyvoice.logging_setup import configure_logging  # noqa: E402
 from polyvoice.paths import data_dir, ensure_data_dir_env, runtime_dir  # noqa: E402
 
 ensure_data_dir_env()
@@ -209,6 +210,7 @@ def main() -> None:
             pass
 
     data_dir().mkdir(parents=True, exist_ok=True)
+    configure_logging()
     extract_bundled_runtime()
 
     print(f"[polyvoice] Data directory: {data_dir()}", flush=True)

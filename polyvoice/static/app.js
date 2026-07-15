@@ -9,13 +9,10 @@
 
   // ----- State -----
   const state = {
-    selectedContact: "demo-friend",
+    selectedContact: null,
     contacts: [],
     // Real WhatsApp JIDs from the linked bridge. We merge these into the
-    // contact picker so the user can always pick a real contact instead of
-    // the "demo-friend" placeholder. Without this, every outbound message
-    // would be stored under contact_id="demo-friend" and the bridge would
-    // refuse to deliver it.
+    // contact picker so outbound messages use a deliverable contact id.
     bridgeChats: [],
     messages: [],
     providerMode: "loading",
@@ -320,12 +317,16 @@
     // The filename hint helps some browsers attach a sensible extension.
     const extension = (recorder.mimeType || recorder.blob.type || "audio/webm").includes("ogg") ? "ogg" : "webm";
     form.append("audio", recorder.blob, `voice-reply.${extension}`);
+    if (!state.selectedContact) {
+      showToast("Connect WhatsApp and select a contact before sending voice.", "error");
+      return;
+    }
     form.append("contact_id", state.selectedContact);
-    form.append("contact_name", els.nameInput.textContent.trim() || "Demo Friend");
+    form.append("contact_name", els.nameInput.textContent.trim() || "WhatsApp Contact");
     if (state.userLanguage) form.append("source_language", state.userLanguage);
     form.append(
       "send_to_platform",
-      bridgeState.status === "ready" && state.selectedContact !== "demo-friend" ? "true" : "false",
+      bridgeState.status === "ready" ? "true" : "false",
     );
 
     try {
@@ -351,8 +352,6 @@
         );
       } else if (bridgeState.status !== "ready") {
         showToast("Saved locally — connect WhatsApp to deliver replies.", "error");
-      } else if (state.selectedContact === "demo-friend") {
-        showToast("Saved locally — pick a real contact to deliver via WhatsApp.", "error");
       } else if (data && data.platform_text) {
         showToast("Translated, but the bridge didn't send. Check the bridge status.", "error");
       } else {
@@ -404,7 +403,7 @@
   function appendOptimisticVoice(blob, mimeType) {
     const now = new Date().toISOString();
     const id = `optimistic-voice-${now}`;
-    const contactName = els.nameInput.textContent.trim() || "Demo Friend";
+    const contactName = els.nameInput.textContent.trim() || "WhatsApp Contact";
     const sourceLanguage = state.userLanguage || els.langSelect.value || "auto";
     const objectUrl = URL.createObjectURL(blob);
     const placeholder = {
@@ -494,8 +493,7 @@
     //   2. state.bridgeChats: the live bridge's view of every JID the
     //      linked phone has ever seen. Reflects who we can actually deliver to.
     // Real bridge JIDs win because we need them to be the contact_id at
-    // send time. The demo-friend placeholder is only shown when neither
-    // source has any rows (i.e. before the user has linked WhatsApp).
+    // send time. When neither source has rows, the sidebar stays empty.
     const byId = new Map();
     for (const c of state.bridgeChats) {
       if (!c || !c.id) continue;
@@ -522,17 +520,6 @@
       }
     }
     let rows = Array.from(byId.values());
-    if (!rows.length) {
-      rows = [
-        {
-          contact_id: "demo-friend",
-          contact_name: "Demo Friend",
-          last_english: "Use the composer to send a first message.",
-          updated_at: null,
-          is_bridge: false,
-        },
-      ];
-    }
     rows.sort((a, b) => {
       const aT = a.updated_at ? Date.parse(a.updated_at) || 0 : 0;
       const bT = b.updated_at ? Date.parse(b.updated_at) || 0 : 0;
@@ -540,20 +527,27 @@
       return String(a.contact_name).localeCompare(String(b.contact_name));
     });
 
-    // If the previously-selected contact is gone (e.g. after delink), fall
-    // back to the first real row so we don't leave the user on a stale
-    // "demo-friend" id that no longer has a matching button.
-    if (!rows.some((r) => r.contact_id === state.selectedContact)) {
+    if (!rows.length) {
+      state.selectedContact = null;
+      if (els.nameInput) els.nameInput.textContent = "No contact selected";
+      const label = bridgeState.status === "ready"
+        ? (bridgeState.chatListReady === false ? "Loading WhatsApp chats..." : "No WhatsApp chats found")
+        : "No conversations yet";
+      els.contacts.innerHTML = `<div class="empty contact-empty">${escapeHtml(label)}</div>`;
+      return;
+    }
+
+    if (!state.selectedContact || !rows.some((r) => r.contact_id === state.selectedContact)) {
       state.selectedContact = rows[0].contact_id;
     }
 
     // Reflect the active contact in the editable name field so the user can
     // see at a glance which contact they're typing into. (Previously this
-    // field was a free-text "Demo Friend" label that misled users into
+    // field used to be a free-text placeholder that misled users into
     // thinking they'd picked a real WhatsApp contact.)
     if (els.nameInput) {
       const active = rows.find((r) => r.contact_id === state.selectedContact);
-      const nextName = (active && active.contact_name) || "Demo Friend";
+      const nextName = (active && active.contact_name) || "WhatsApp Contact";
       if (els.nameInput.textContent !== nextName) els.nameInput.textContent = nextName;
     }
 
@@ -699,6 +693,11 @@
     const list = state.messages.filter((m) => m.contact_id === state.selectedContact);
     const first = list[0];
     els.title.textContent = (first && first.contact_name) || "Realtime Translator";
+
+    if (!state.selectedContact) {
+      els.messages.innerHTML = `<div class="empty">No conversations yet. Connect WhatsApp to begin.</div>`;
+      return;
+    }
 
     if (!list.length) {
       els.messages.innerHTML = `<div class="empty">No conversation yet. Connect WhatsApp or type a local reply draft below.</div>`;
@@ -923,7 +922,7 @@
   function appendOptimistic(text) {
     const now = new Date().toISOString();
     const id = `optimistic-${now}`;
-    const contactName = els.nameInput.textContent.trim() || "Demo Friend";
+    const contactName = els.nameInput.textContent.trim() || "WhatsApp Contact";
     // The composer always represents the system user typing in *their own*
     // language, so the optimistic bubble can show the real source language
     // before the server response lands. The target language is "auto" until
@@ -993,6 +992,10 @@
     event.preventDefault();
     const text = els.textInput.value.trim();
     if (!text) return;
+    if (!state.selectedContact) {
+      showToast("Connect WhatsApp and select a contact before sending.", "error");
+      return;
+    }
     // Clear the input *before* awaiting the network so the user can keep
     // typing the next message instead of waiting for this one to round
     // trip. The optimistic bubble already shows the text they sent.
@@ -1002,10 +1005,10 @@
     const optimisticId = appendOptimistic(text);
     const body = {
       contact_id: state.selectedContact,
-      contact_name: els.nameInput.textContent.trim() || "Demo Friend",
+      contact_name: els.nameInput.textContent.trim() || "WhatsApp Contact",
       text,
       source_language: els.langSelect.value || null,
-      send_to_platform: bridgeState.status === "ready" && state.selectedContact !== "demo-friend",
+      send_to_platform: bridgeState.status === "ready",
     };
     try {
       const r = await fetch("/api/reply/text", {
@@ -1022,8 +1025,6 @@
         showToast("Sent to WhatsApp.", "success");
       } else if (bridgeState.status !== "ready") {
         showToast("Saved locally — connect WhatsApp to deliver replies.", "error");
-      } else if (state.selectedContact === "demo-friend") {
-        showToast("Saved locally — pick a real contact to deliver via WhatsApp.", "error");
       } else if (data && data.platform_text) {
         showToast("Translated, but the bridge didn't send. Check the bridge status.", "error");
       } else {
@@ -1122,12 +1123,9 @@
   function bootstrap() {
     prewarmMicPermission();
     // Bridge first so the contact list has real JIDs available when
-    // /api/conversations returns. The order matters: if conversations
-    // arrives first with no rows, the picker falls back to the demo
-    // placeholder; if the bridge chats arrive later the user has to wait
-    // for a second poll to see their real contact list.
+    // /api/conversations returns.
     loadBridgeState().then(() => {
-      if (state.selectedContact === "demo-friend" && state.bridgeChats.length) {
+      if (!state.selectedContact && state.bridgeChats.length) {
         state.selectedContact = state.bridgeChats[0].id;
         renderContacts();
         renderMessagesAndTrack();

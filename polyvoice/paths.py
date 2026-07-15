@@ -104,6 +104,11 @@ def reply_audio_dir() -> Path:
     return data_dir() / "reply_audio"
 
 
+def log_file_path() -> Path:
+    """Main application log file."""
+    return data_dir() / "polyvoice.log"
+
+
 def voice_profiles_dir() -> Path:
     """Directory for user voice samples and the local voice profile manifest."""
     return data_dir() / "voice_profiles"

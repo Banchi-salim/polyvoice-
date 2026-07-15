@@ -22,6 +22,7 @@ from polyvoice.bridge_runner import (
 )
 from polyvoice.config import load_config
 from polyvoice.conversations import ConversationStore, WhatsAppConversationService
+from polyvoice.logging_setup import configure_logging
 from polyvoice.paths import reply_audio_dir, whatsapp_session_dir
 from polyvoice.providers.whisper_stt import EmptyTranscriptError
 from polyvoice.whatsapp import (
@@ -33,6 +34,7 @@ from polyvoice.whatsapp import (
 )
 
 
+configure_logging()
 config = load_config()
 store = ConversationStore()
 conversation_service = WhatsAppConversationService(config, store)
@@ -60,8 +62,8 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
 class SimulatedTextMessage(BaseModel):
-    contact_id: str = "demo-friend"
-    contact_name: str = "Demo Friend"
+    contact_id: str
+    contact_name: str
     text: str
     source_language: str | None = None
     target_language: str | None = None
@@ -131,10 +133,8 @@ async def whatsapp_web_status() -> dict[str, object]:
 async def whatsapp_web_chats() -> dict[str, object]:
     """Return the bridge's chat list for the contact picker.
 
-    The bridge is the source of truth for real WhatsApp JIDs; without this
-    the picker would only ever fall back to the ``demo-friend`` placeholder
-    and every outbound message would be stored under that id (and rejected
-    by the bridge because demo-friend is not a valid JID).
+    The bridge is the source of truth for real WhatsApp JIDs. Outbound
+    delivery requires one of these ids rather than a local placeholder.
     """
     return await list_bridge_chats_async()
 
@@ -204,7 +204,7 @@ async def stream_reply_audio(message_id: str, request: Request) -> Response:
     """Stream a previously generated voice-note reply back to the browser.
 
     The message id is the persisted translation id written by the conversation
-    service (e.g. ``demo-friend-2026-07-03T...-in``). Rather than re-deriving
+    service (e.g. ``2348012345678@c.us-2026-07-03T...-in``). Rather than re-deriving
     the on-disk filename from the URL (which only works if this endpoint's
     naming convention stays in lockstep with ``conversations.py``'s), we look
     up the message in the store and trust its ``reply_audio_path``. This also
@@ -448,8 +448,8 @@ async def reply_voice(
 @app.post("/api/simulate/voice")
 async def simulate_voice(
     audio: UploadFile = File(...),
-    contact_id: str = Form("demo-friend"),
-    contact_name: str = Form("Demo Friend"),
+    contact_id: str = Form(...),
+    contact_name: str = Form(...),
     source_language: str | None = Form("fr"),
 ) -> dict[str, object]:
     content = await audio.read()
