@@ -326,7 +326,7 @@
     if (state.userLanguage) form.append("source_language", state.userLanguage);
     form.append(
       "send_to_platform",
-      bridgeState.status === "ready" ? "true" : "false",
+      bridgeState.status === "ready" && state.selectedContact !== "demo-friend" ? "true" : "false",
     );
 
     try {
@@ -527,14 +527,28 @@
       return String(a.contact_name).localeCompare(String(b.contact_name));
     });
 
+    // If neither the conversation history nor the bridge has any rows yet,
+    // fall back to a local "demo-friend" placeholder so the composer still
+    // works (translation, TTS, etc.) before WhatsApp is linked. This id is
+    // never sent to the bridge because send_to_platform is only true when
+    // bridgeState.status === "ready", which can't happen with zero chats.
     if (!rows.length) {
-      state.selectedContact = null;
-      if (els.nameInput) els.nameInput.textContent = "No contact selected";
-      const label = bridgeState.status === "ready"
-        ? (bridgeState.chatListReady === false ? "Loading WhatsApp chats..." : "No WhatsApp chats found")
-        : "No conversations yet";
-      els.contacts.innerHTML = `<div class="empty contact-empty">${escapeHtml(label)}</div>`;
-      return;
+      if (bridgeState.status === "ready") {
+        state.selectedContact = null;
+        if (els.nameInput) els.nameInput.textContent = "No contact selected";
+        const label = bridgeState.chatListReady === false ? "Loading WhatsApp chats..." : "No WhatsApp chats found";
+        els.contacts.innerHTML = `<div class="empty contact-empty">${escapeHtml(label)}</div>`;
+        return;
+      }
+      rows = [
+        {
+          contact_id: "demo-friend",
+          contact_name: "Demo Friend",
+          last_english: "Use the composer to send a first message.",
+          updated_at: null,
+          is_bridge: false,
+        },
+      ];
     }
 
     if (!state.selectedContact || !rows.some((r) => r.contact_id === state.selectedContact)) {
@@ -1008,7 +1022,7 @@
       contact_name: els.nameInput.textContent.trim() || "WhatsApp Contact",
       text,
       source_language: els.langSelect.value || null,
-      send_to_platform: bridgeState.status === "ready",
+      send_to_platform: bridgeState.status === "ready" && state.selectedContact !== "demo-friend",
     };
     try {
       const r = await fetch("/api/reply/text", {

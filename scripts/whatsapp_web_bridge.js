@@ -230,7 +230,7 @@ client.on("message", async (message) => {
 });
 
 async function syncUnreadChats() {
-  if (state.status !== "ready" || !state.chatListReady) return;
+  if (state.status !== "ready") return;
   state.lastSyncAt = new Date().toISOString();
   let chats;
   try {
