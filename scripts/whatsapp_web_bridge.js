@@ -25,6 +25,10 @@ const state = {
   chatCount: 0,
   lastMessageAt: null,
   lastSyncAt: null,
+  lastRawMessage: null,
+  lastIncomingDecision: null,
+  lastMediaAttempt: null,
+  lastPolyVoicePost: null,
   handledCount: 0,
 };
 
@@ -186,6 +190,12 @@ const client = new Client({
   puppeteer: {
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    // Default is 180000ms. whatsapp-web.js's internal page evaluations
+    // (getChats, sendSeen, etc.) can hang for a while under WhatsApp Web's
+    // own load spikes; a low timeout here manifests as spurious
+    // "Execution context was destroyed" / "Runtime.callFunctionOn timed
+    // out" crashes that tear down the whole session for no real reason.
+    protocolTimeout: 300000,
   },
 });
 
@@ -207,6 +217,7 @@ client.on("authenticated", () => {
 client.on("ready", () => {
   state.status = "ready";
   state.me = client.info && client.info.wid ? client.info.wid.user : null;
+  reinitAttempts = 0;
   console.log("WhatsApp Web bridge is ready.");
   refreshChatCache().catch(recordError);
   chatRefreshTimer = setInterval(() => {
@@ -224,13 +235,44 @@ client.on("auth_failure", (message) => {
   console.error("WhatsApp auth failure:", message);
 });
 
+let reinitAttempts = 0;
+let reinitTimer = null;
+
 client.on("disconnected", (reason) => {
   state.status = "disconnected";
   state.lastError = reason;
   console.error("WhatsApp disconnected:", reason);
+
+  // Without this, a dropped session (LOGOUT, or Puppeteer losing the page)
+  // just sits dead forever — the process stays up, /status still responds,
+  // but nothing is listening for messages until a human notices and
+  // manually restarts the bridge. Auto-reinitialize with backoff instead.
+  if (syncTimer) {
+    clearInterval(syncTimer);
+    syncTimer = null;
+  }
+  if (chatRefreshTimer) {
+    clearInterval(chatRefreshTimer);
+    chatRefreshTimer = null;
+  }
+  if (reinitTimer) return; // a reconnect attempt is already scheduled
+
+  reinitAttempts += 1;
+  const delay = Math.min(5000 * reinitAttempts, 60000);
+  console.log(`Attempting WhatsApp Web reinitialize in ${delay}ms (attempt ${reinitAttempts})...`);
+  reinitTimer = setTimeout(() => {
+    reinitTimer = null;
+    client.initialize().catch((error) => {
+      recordError(error);
+    });
+  }, delay);
 });
 
 client.on("message", async (message) => {
+  await processIncomingMessage(message);
+});
+
+client.on("message_create", async (message) => {
   await processIncomingMessage(message);
 });
 
@@ -293,21 +335,42 @@ async function refreshChatCache() {
 async function processIncomingMessage(message) {
   let messageId = null;
   try {
-    if (message.fromMe) return;
-    if (!REPLY_GROUPS && message.from.endsWith("@g.us")) return;
+    const rawMessage = summarizeMessage(message);
+    state.lastRawMessage = rawMessage;
+    // TEMP DIAGNOSTIC: log every message that reaches this function, before
+    // any filtering, so we can see exactly what whatsapp-web.js reports for
+    // messages from other people vs. self. Remove once the bug is found.
+    console.log("RAW MESSAGE EVENT:", JSON.stringify(rawMessage));
+
+    if (message.fromMe) {
+      state.lastIncomingDecision = { message_id: rawMessage.id, ignored: "from_me", at: new Date().toISOString() };
+      return;
+    }
+    if (!REPLY_GROUPS && message.from.endsWith("@g.us")) {
+      state.lastIncomingDecision = { message_id: rawMessage.id, ignored: "group", at: new Date().toISOString() };
+      return;
+    }
     messageId = message.id && message.id._serialized ? message.id._serialized : `${message.from}:${message.timestamp}:${message.body}`;
-    if (handledMessageIds.has(messageId)) return;
-    if (processingMessageIds.has(messageId)) return;
+    if (handledMessageIds.has(messageId)) {
+      state.lastIncomingDecision = { message_id: messageId, ignored: "already_handled", at: new Date().toISOString() };
+      return;
+    }
+    if (processingMessageIds.has(messageId)) {
+      state.lastIncomingDecision = { message_id: messageId, ignored: "already_processing", at: new Date().toISOString() };
+      return;
+    }
     processingMessageIds.add(messageId);
 
     const contact = await message.getContact();
     const contactName = contact.pushname || contact.name || contact.number || message.from;
     state.lastMessageAt = new Date().toISOString();
 
-    if (message.hasMedia && (message.type === "audio" || message.type === "ptt")) {
+    if (isVoiceNoteCandidate(message)) {
+      state.lastIncomingDecision = { message_id: messageId, handling: "voice", type: message.type, at: new Date().toISOString() };
       console.log(`Incoming WhatsApp voice note from ${contactName}; downloading media...`);
       const media = await downloadMediaWithRetry(message, messageId);
       if (!media || !media.data) {
+        state.lastIncomingDecision = { message_id: messageId, failed: "media_unavailable", at: new Date().toISOString() };
         console.warn(`WhatsApp voice note media was not available after retries: ${messageId}`);
         return;
       }
@@ -328,11 +391,13 @@ async function processIncomingMessage(message) {
 
     const text = (message.body || "").trim();
     if (!text) {
+      state.lastIncomingDecision = { message_id: messageId, ignored: "empty_non_voice", type: message.type, at: new Date().toISOString() };
       markHandled(messageId);
       return;
     }
 
     // For text messages, let the PolyVoice backend detect the language
+    state.lastIncomingDecision = { message_id: messageId, handling: "text", at: new Date().toISOString() };
     await askPolyVoice({
       contact_id: message.from,
       contact_name: contactName,
@@ -351,6 +416,29 @@ async function processIncomingMessage(message) {
   }
 }
 
+function summarizeMessage(message) {
+  return {
+    id: message.id && message.id._serialized ? message.id._serialized : null,
+    from: message.from,
+    author: message.author,
+    fromMe: message.fromMe,
+    type: message.type,
+    hasMedia: message.hasMedia,
+    mimetype: (message.rawData && message.rawData.mimetype) || message.mimetype || null,
+    isForwarded: message.isForwarded,
+    body: (message.body || "").slice(0, 80),
+    timestamp: message.timestamp,
+    ack: message.ack,
+    at: new Date().toISOString(),
+  };
+}
+
+function isVoiceNoteCandidate(message) {
+  const type = String(message.type || "").toLowerCase();
+  const mimetype = String((message.rawData && message.rawData.mimetype) || message.mimetype || "").toLowerCase();
+  return type === "audio" || type === "ptt" || mimetype.startsWith("audio/");
+}
+
 async function downloadMediaWithRetry(message, messageId) {
   const attempts = [0, 1000, 2000, 4000, 8000];
   let lastError = null;
@@ -360,16 +448,76 @@ async function downloadMediaWithRetry(message, messageId) {
       await sleep(delay);
     }
     try {
-      const media = await message.downloadMedia();
+      if (index > 0 && typeof message.reload === "function") {
+        await message.reload();
+      }
+      state.lastMediaAttempt = {
+        message_id: messageId,
+        attempt: index + 1,
+        hasMedia: message.hasMedia,
+        type: message.type,
+        mimetype: (message.rawData && message.rawData.mimetype) || message.mimetype || null,
+        at: new Date().toISOString(),
+      };
+      let media = await message.downloadMedia();
+      if (!media && !message.id?._serialized) {
+        media = await downloadMediaByMetadata(message);
+      }
       if (media && media.data) {
+        state.lastMediaAttempt = {
+          ...state.lastMediaAttempt,
+          ok: true,
+          bytes_base64: media.data.length,
+          media_mimetype: media.mimetype,
+        };
         if (index > 0) {
           console.log(`WhatsApp media became available after ${index + 1} attempts: ${messageId}`);
         }
         return media;
       }
+      state.lastMediaAttempt = { ...state.lastMediaAttempt, ok: false, empty: true };
       console.warn(`WhatsApp media download returned empty data on attempt ${index + 1}/${attempts.length}: ${messageId}`);
     } catch (error) {
       lastError = error;
+      let fallbackFailed = false;
+      if (!message.id?._serialized) {
+        try {
+          const media = await downloadMediaByMetadata(message);
+          if (media && media.data) {
+            state.lastMediaAttempt = {
+              message_id: messageId,
+              attempt: index + 1,
+              ok: true,
+              fallback: "metadata",
+              bytes_base64: media.data.length,
+              media_mimetype: media.mimetype,
+              at: new Date().toISOString(),
+            };
+            return media;
+          }
+        } catch (fallbackError) {
+          fallbackFailed = true;
+          state.lastMediaAttempt = {
+            message_id: messageId,
+            attempt: index + 1,
+            ok: false,
+            fallback: "metadata",
+            error: String(fallbackError && fallbackError.message ? fallbackError.message : fallbackError),
+            at: new Date().toISOString(),
+          };
+        }
+      }
+      if (fallbackFailed) {
+        console.warn(`WhatsApp metadata media download failed on attempt ${index + 1}/${attempts.length}: ${messageId}`);
+        continue;
+      }
+      state.lastMediaAttempt = {
+        message_id: messageId,
+        attempt: index + 1,
+        ok: false,
+        error: String(error && error.message ? error.message : error),
+        at: new Date().toISOString(),
+      };
       console.warn(`WhatsApp media download failed on attempt ${index + 1}/${attempts.length}:`, error);
     }
   }
@@ -379,17 +527,123 @@ async function downloadMediaWithRetry(message, messageId) {
   return null;
 }
 
+async function downloadMediaByMetadata(message) {
+  const hint = {
+    from: message.from,
+    to: message.to,
+    timestamp: message.timestamp,
+    type: message.type,
+    mimetype: (message.rawData && message.rawData.mimetype) || message.mimetype || null,
+  };
+
+  const result = await client.pupPage.evaluate(async (hint) => {
+    const collections = window.require("WAWebCollections");
+    const chats = collections.Chat.getModelsArray ? collections.Chat.getModelsArray() : [];
+    const expectedTime = Number(hint.timestamp || 0);
+    const expectedType = String(hint.type || "");
+    const expectedMime = String(hint.mimetype || "");
+
+    function widString(value) {
+      if (!value) return "";
+      if (typeof value === "string") return value;
+      return value._serialized || value.user || String(value);
+    }
+
+    function matches(msg) {
+      if (!msg) return false;
+      if (expectedType && msg.type !== expectedType) return false;
+      if (expectedMime && msg.mimetype && msg.mimetype !== expectedMime) return false;
+      if (expectedTime && Math.abs(Number(msg.t || 0) - expectedTime) > 2) return false;
+      const from = widString(msg.from);
+      const to = widString(msg.to);
+      return from === hint.from || to === hint.from || from === hint.to || to === hint.to;
+    }
+
+    let candidates = [];
+    for (const chat of chats) {
+      const msgs = chat && chat.msgs && chat.msgs.getModelsArray ? chat.msgs.getModelsArray() : [];
+      candidates.push(...msgs.filter(matches));
+    }
+
+    const globalMsgs = collections.Msg && collections.Msg.getModelsArray ? collections.Msg.getModelsArray() : [];
+    candidates.push(...globalMsgs.filter(matches));
+    candidates = [...new Set(candidates)];
+    candidates.sort((a, b) => Math.abs(Number(a.t || 0) - expectedTime) - Math.abs(Number(b.t || 0) - expectedTime));
+
+    const msg = candidates[0];
+    if (!msg || !msg.mediaData) {
+      return null;
+    }
+
+    if (msg.mediaData.mediaStage !== "RESOLVED") {
+      await msg.downloadMedia({
+        downloadEvenIfExpensive: true,
+        rmrReason: 1,
+      });
+    }
+
+    if (
+      !msg.mediaData ||
+      String(msg.mediaData.mediaStage || "").includes("ERROR") ||
+      msg.mediaData.mediaStage === "FETCHING" ||
+      msg.mediaData.mediaStage === "REUPLOADING"
+    ) {
+      return null;
+    }
+
+    const mockQpl = {
+      addAnnotations: function () {
+        return this;
+      },
+      addPoint: function () {
+        return this;
+      },
+    };
+    const decryptedMedia = await window
+      .require("WAWebDownloadManager")
+      .downloadManager.downloadAndMaybeDecrypt({
+        directPath: msg.directPath,
+        encFilehash: msg.encFilehash,
+        filehash: msg.filehash,
+        mediaKey: msg.mediaKey,
+        mediaKeyTimestamp: msg.mediaKeyTimestamp,
+        type: msg.type,
+        signal: new AbortController().signal,
+        downloadQpl: mockQpl,
+      });
+
+    const data = await window.WWebJS.arrayBufferToBase64Async(decryptedMedia);
+    return {
+      data,
+      mimetype: msg.mimetype || hint.mimetype || "audio/ogg; codecs=opus",
+      filename: msg.filename || null,
+      filesize: msg.size || null,
+      matched: {
+        from: widString(msg.from),
+        to: widString(msg.to),
+        type: msg.type,
+        t: msg.t,
+        mediaStage: msg.mediaData && msg.mediaData.mediaStage,
+      },
+    };
+  }, hint);
+
+  return result;
+}
+
 function recordError(error) {
   state.lastError = error && error.stack ? error.stack : String(error);
   console.error("WhatsApp bridge error:", error);
 }
 
 async function askPolyVoice(payload) {
+  state.lastPolyVoicePost = { kind: payload.kind, contact_id: payload.contact_id, started_at: new Date().toISOString() };
   const response = await fetch(`${POLYVOICE_URL}/bridges/whatsapp-web/message`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+  state.lastPolyVoicePost = { ...state.lastPolyVoicePost, status: response.status, finished_at: new Date().toISOString() };
   if (!response.ok) {
     throw new Error(`PolyVoice returned ${response.status}: ${await response.text()}`);
   }
